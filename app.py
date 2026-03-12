@@ -6,10 +6,12 @@ from azure.data.tables import TableServiceClient
 from dotenv import load_dotenv
 
 load_dotenv()
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # configuration is read lazily so the module can be imported without
 # immediately blowing up when the environment is not yet wired up.  this
-# makes unit testing and tooling easier.  the helper functions below will
+# makes unit testing and tooling easier.  the helper functions b
+# elow will
 # initialize the client on first use and will raise the same errors that
 # previously occurred at import time.
 
@@ -24,11 +26,21 @@ def _init_client():
 
     Raises :class:`RuntimeError` if the required credentials are missing.
     """
-    account = os.getenv('AZURE_STORAGE_ACCOUNT')
-    key = os.getenv('AZURE_STORAGE_KEY')
+    account = (os.getenv('AZURE_STORAGE_ACCOUNT') or '').strip()
+    key = (os.getenv('AZURE_STORAGE_KEY') or '').strip()
+    endpoint = (os.getenv('AZURE_TABLES_ENDPOINT') or '').strip()
 
-    if not account or not key:
-        raise RuntimeError('Missing AZURE_STORAGE_ACCOUNT or AZURE_STORAGE_KEY')
+    if not key:
+        raise RuntimeError('Missing AZURE_STORAGE_KEY')
+
+    if endpoint:
+        svc = TableServiceClient(endpoint=endpoint, credential=key)
+        return svc.get_table_client(TABLE_NAME)
+
+    if not account:
+        raise RuntimeError('Missing AZURE_STORAGE_ACCOUNT (or set AZURE_TABLES_ENDPOINT)')
+
+    account = account.replace('https://', '').split('.')[0]
 
     conn_str = (
         f'DefaultEndpointsProtocol=https;AccountName={account};'
@@ -48,7 +60,7 @@ def _ensure_client():
         client = _init_client()
     return client
 
-app = Flask(__name__, static_folder='.', static_url_path='')
+app = Flask(__name__, static_folder=BASE_DIR, static_url_path='')
 
 # ── Column classification patterns ────────────────────────────────────────────
 # Actual column names from Microsoft Forms have no spaces / special chars, e.g.:
@@ -162,6 +174,55 @@ def find_col(cols, pattern):
     return next((c for c in cols if pattern.search(c)), None)
 
 
+def _normalize_col_name(name):
+    return re.sub(r'[^a-z0-9]', '', str(name).lower())
+
+
+def find_version_column(columns):
+    """Find the versions-selection column deterministically.
+
+    Prioritizes the explicit column shared by the user screenshot:
+    "Howmanyversionsareyouevaluating".
+    """
+    preferred = 'howmanyversionsareyouevaluating'
+    for col in sorted(columns):
+        if _normalize_col_name(col) == preferred:
+            return col
+
+    patterns = [
+        re.compile(r'howmanyversionsareyouevaluating', re.I),
+        re.compile(r'howmany.?versions', re.I),
+        re.compile(r'version.?count', re.I),
+    ]
+    for pat in patterns:
+        match = find_col(sorted(columns), pat)
+        if match:
+            return match
+    return None
+
+
+def parse_version_choice(val):
+    """Parse pathway selector value as discrete choice 1 or 2."""
+    if val is None:
+        return None
+    if isinstance(val, bool):
+        return None
+    if isinstance(val, (int, float)):
+        as_int = int(round(float(val)))
+        return as_int if as_int in (1, 2) else None
+
+    txt = str(val).strip().lower()
+    if txt in {'1', '1.0', 'one', 'single'}:
+        return 1
+    if txt in {'2', '2.0', 'two', 'ab', 'a/b'}:
+        return 2
+
+    m = re.search(r'\b([12])\b', txt)
+    if m:
+        return int(m.group(1))
+    return None
+
+
 def safe_avg(lst):
     return round(sum(lst) / len(lst)) if lst else None
 
@@ -263,7 +324,7 @@ def compute_version_data(rows, col_map, version_col):
     if not version_col:
         return []
 
-    ab_rows = [r for r in rows if coerce_float(r.get(version_col)) == 2]
+    ab_rows = [r for r in rows if parse_version_choice(r.get(version_col)) == 2]
     if not ab_rows:
         return []
 
@@ -392,6 +453,33 @@ def compute_trend_data(rows, status_col, date_col):
     return labels, scores
 
 
+def compute_pathway_counts(rows, version_col):
+    """Count rows by selected pathway using the versions-count column.
+
+    A value of 1 means single-version pathway, 2 means A/B pathway.
+    """
+    counts = {
+        'total': len(rows),
+        'singleVersion': 0,
+        'abVersion': 0,
+        'unknown': 0,
+    }
+    if not version_col:
+        counts['unknown'] = len(rows)
+        return counts
+
+    for row in rows:
+        v = parse_version_choice(row.get(version_col))
+        if v == 1:
+            counts['singleVersion'] += 1
+        elif v == 2:
+            counts['abVersion'] += 1
+        else:
+            counts['unknown'] += 1
+
+    return counts
+
+
 def normalize_rows(raw_rows):
     cleaned = []
     for row in raw_rows:
@@ -407,6 +495,75 @@ def normalize_rows(raw_rows):
             entry[k] = v
         cleaned.append(entry)
     return cleaned
+
+
+def _first_present(row, keys, default='Unknown'):
+    for key in keys:
+        val = row.get(key)
+        if val is None:
+            continue
+        text = str(val).strip()
+        if text:
+            return text
+    return default
+
+
+def compute_encounter_summaries(rows, col_map, status_col=None, specialty_col=None):
+    """Build encounter-level summaries from Azure table rows."""
+    summaries = []
+
+    for row in rows:
+        section_scores = defaultdict(list)
+        for col, meta in col_map.items():
+            if meta['version'] is not None:
+                continue
+            val = coerce_float(row.get(col))
+            if val is None:
+                continue
+            section_scores[meta['section']].append(val)
+
+        sec_avg = {
+            section: safe_avg(values)
+            for section, values in section_scores.items()
+            if values
+        }
+
+        hpi = sec_avg.get('hpi')
+        ap = sec_avg.get('ap')
+        pe = sec_avg.get('physical_exam')
+        overall_values = [v for v in [hpi, ap, pe] if v is not None]
+        overall = safe_avg(overall_values)
+
+        status_raw = str(row.get(status_col, '')).strip() if status_col else ''
+        if status_raw:
+            status = status_raw
+        else:
+            if overall is None:
+                status = 'Unknown'
+            elif overall >= 85:
+                status = 'Pass'
+            elif overall >= 70:
+                status = 'At Risk'
+            else:
+                status = 'Fail'
+
+        summaries.append({
+            'id': _first_present(row, ['NEATEncounterID', 'Id', 'RowKey', 'id'], default='Unknown'),
+            'specialty': _first_present(
+                row,
+                [specialty_col, 'NEATSpecialty', 'Specialty', 'specialty', 'Department', 'dept'] if specialty_col else ['NEATSpecialty', 'Specialty', 'specialty', 'Department', 'dept'],
+                default='Unknown',
+            ),
+            'region': _first_present(row, ['SelectRegion', 'Region', 'region'], default='Unknown'),
+            'evaluator': _first_present(row, ['CIUserName', 'Name', 'Email', 'evaluator'], default='Unknown'),
+            'hpi': hpi if hpi is not None else 0,
+            'ap': ap if ap is not None else 0,
+            'pe': pe if pe is not None else 0,
+            'overall': overall if overall is not None else 0,
+            'status': status,
+        })
+
+    return summaries
 
 
 def transform_rows(raw_rows):
@@ -425,7 +582,7 @@ def transform_rows(raw_rows):
     col_map     = classify_columns(all_cols)
 
     # Detect helper columns
-    version_col   = find_col(all_cols, re.compile(r'howmany.?versions|version.?count', re.I))
+    version_col   = find_version_column(all_cols)
     status_col    = find_col(all_cols, re.compile(r'\bstatus\b',                        re.I))
     specialty_col = find_col(all_cols, re.compile(r'specialty|speciali[st]|dept',       re.I))
     date_col      = find_col(all_cols, re.compile(r'\bdate\b|\btimestamp\b',            re.I))
@@ -434,14 +591,17 @@ def transform_rows(raw_rows):
     version_data     = compute_version_data(rows, col_map, version_col)
     trend_months, trend_scores = compute_trend_data(rows, status_col, date_col)
     specialty_heatmap = compute_specialty_heatmap(rows, col_map, specialty_col)
+    pathway_counts = compute_pathway_counts(rows, version_col)
+    encounter_summaries = compute_encounter_summaries(rows, col_map, status_col=status_col, specialty_col=specialty_col)
 
     return {
-        'encounters':       rows,
+        'encounters':       encounter_summaries,
         'sectionData':      section_data,
         'versionData':      version_data,
         'trendMonths':      trend_months,
         'trendScores':      trend_scores,
         'specialtyHeatmap': specialty_heatmap,
+        'pathwayCounts':    pathway_counts,
     }
 
 
@@ -452,9 +612,14 @@ def get_form_data():
     except RuntimeError as exc:
         # return a JSON error instead of letting import-time failure bubble
         return jsonify({'error': str(exc)}), 500
+    except Exception as exc:
+        return jsonify({'error': f'Client initialization failed: {exc}'}), 500
 
-    entities = list(tbl.list_entities())
-    return jsonify(transform_rows(entities))
+    try:
+        entities = list(tbl.list_entities())
+        return jsonify(transform_rows(entities))
+    except Exception as exc:
+        return jsonify({'error': f'Azure query failed: {exc}'}), 502
 
 
 @app.route('/api/schema')
@@ -464,26 +629,45 @@ def get_schema():
         tbl = _ensure_client()
     except RuntimeError as exc:
         return jsonify({'error': str(exc)}), 500
+    except Exception as exc:
+        return jsonify({'error': f'Client initialization failed: {exc}'}), 500
 
-    entities = list(tbl.list_entities(results_per_page=10))[:10]
-    rows     = normalize_rows(entities)
-    cols     = sorted({k for r in rows for k in r if k not in SYSTEM_COLS})
-    all_cols = {k for r in rows for k in r} - SYSTEM_COLS
-    col_map  = classify_columns(all_cols)
-    return jsonify({
-        'total_rows_sampled': len(rows),
-        'columns':            cols,
-        'column_mappings':    {c: m for c, m in col_map.items()},
-        'sample_rows':        rows[:2],
-    })
+    try:
+        entities = list(tbl.list_entities(results_per_page=10))[:10]
+        rows = normalize_rows(entities)
+        cols = sorted({k for r in rows for k in r if k not in SYSTEM_COLS})
+        all_cols = {k for r in rows for k in r} - SYSTEM_COLS
+        col_map = classify_columns(all_cols)
+        return jsonify({
+            'total_rows_sampled': len(rows),
+            'columns': cols,
+            'column_mappings': {c: m for c, m in col_map.items()},
+            'sample_rows': rows[:2],
+        })
+    except Exception as exc:
+        return jsonify({'error': f'Azure schema query failed: {exc}'}), 502
+
+
+@app.route('/health')
+def health():
+    return jsonify({'ok': True}), 200
 
 
 @app.route('/', defaults={'path': 'clinical_eval_dashboard.html'})
 @app.route('/<path:path>')
 def serve_static(path):
-    return send_from_directory('.', path)
+    target = path or 'clinical_eval_dashboard.html'
+    full_path = os.path.join(BASE_DIR, target)
+    if os.path.exists(full_path):
+        return send_from_directory(BASE_DIR, target)
+
+    index_path = os.path.join(BASE_DIR, 'index.html')
+    if os.path.exists(index_path):
+        return send_from_directory(BASE_DIR, 'index.html')
+
+    return jsonify({'error': f'File not found: {target}'}), 404
 
 
 if __name__ == '__main__':
-    port = int(os.getenv('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)
+    port = int(os.getenv('PORT', 5001))
+    app.run(host='0.0.0.0', port=port, debug=True, use_reloader=False)

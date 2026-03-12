@@ -426,6 +426,8 @@
     </div>
   </div>
 
+  <div id="data-status" style="display:none;margin:12px 32px 0;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2)"></div>
+
   <!-- Main -->
   <main>
 
@@ -471,7 +473,7 @@
             <div class="kpi-trend up">↑ 12%</div>
           </div>
           <div class="kpi-value" id="kpi4-value" style="color: var(--accent3)">247</div>
-          <div class="kpi-label">Total Encounters</div>
+          <div class="kpi-label">Single-Version Completed Evaluations</div>
           <div class="kpi-sub" id="kpi4-sub">8 specialties · 3 regions</div>
         </div>
       </div>
@@ -576,26 +578,26 @@
       <!-- KPIs v2 -->
       <div class="kpi-row">
         <div class="kpi-card blue">
-          <div class="kpi-header"><div class="kpi-icon blue">⚔️</div><div class="kpi-trend up">+3%</div></div>
-          <div class="kpi-value" style="background: linear-gradient(135deg,#3b82f6,#8b5cf6); background-clip:text; -webkit-background-clip:text; -webkit-text-fill-color:transparent;">62%</div>
+          <div class="kpi-header"><div class="kpi-icon blue">⚔️</div><div class="kpi-trend up" id="kpi-v2-trend1">—</div></div>
+          <div class="kpi-value" id="kpi-v2-value1" style="background: linear-gradient(135deg,#3b82f6,#8b5cf6); background-clip:text; -webkit-background-clip:text; -webkit-text-fill-color:transparent;">0%</div>
           <div class="kpi-label">Version 1 Win Rate</div>
           <div class="kpi-sub">Across all sections</div>
         </div>
         <div class="kpi-card purple">
-          <div class="kpi-header"><div class="kpi-icon purple">🏆</div><div class="kpi-trend down">-3%</div></div>
-          <div class="kpi-value" style="color:var(--accent3)">28%</div>
+          <div class="kpi-header"><div class="kpi-icon purple">🏆</div><div class="kpi-trend down" id="kpi-v2-trend2">—</div></div>
+          <div class="kpi-value" id="kpi-v2-value2" style="color:var(--accent3)">0%</div>
           <div class="kpi-label">Version 2 Win Rate</div>
           <div class="kpi-sub">Across all sections</div>
         </div>
         <div class="kpi-card amber">
-          <div class="kpi-header"><div class="kpi-icon amber">🤝</div><div class="kpi-trend neutral">— 0%</div></div>
-          <div class="kpi-value" style="color:var(--amber)">10%</div>
+          <div class="kpi-header"><div class="kpi-icon amber">🤝</div><div class="kpi-trend neutral" id="kpi-v2-trend3">—</div></div>
+          <div class="kpi-value" id="kpi-v2-value3" style="color:var(--amber)">0%</div>
           <div class="kpi-label">Tie Rate</div>
           <div class="kpi-sub">Both correct or both incorrect</div>
         </div>
         <div class="kpi-card green">
-          <div class="kpi-header"><div class="kpi-icon green">📋</div><div class="kpi-trend up">↑ 8</div></div>
-          <div class="kpi-value" style="color:var(--green)">89</div>
+          <div class="kpi-header"><div class="kpi-icon green">📋</div><div class="kpi-trend up" id="kpi-v2-trend4">—</div></div>
+          <div class="kpi-value" id="kpi-v2-value4" style="color:var(--green)">0</div>
           <div class="kpi-label">A/B Encounters Evaluated</div>
           <div class="kpi-sub">Dual-version assessments</div>
         </div>
@@ -706,6 +708,7 @@ const SECTIONS = [
 let sectionData = {};
 let versionData = [];
 let encounters = [];
+let pathwayCounts = { total: 0, singleVersion: 0, abVersion: 0, unknown: 0 };
 let trendMonths = [];
 let trendScores = [];
 let specialtyHeatmap = {};  // optional heatmap structure returned by the API
@@ -727,20 +730,50 @@ let currentMode = 1;
 let heatmapView = 'score';
 let charts = {};
 
+function setDataStatus(message, isError = false) {
+  const el = document.getElementById('data-status');
+  if (!el) return;
+  if (!message) {
+    el.style.display = 'none';
+    el.textContent = '';
+    return;
+  }
+  el.style.display = 'block';
+  el.textContent = message;
+  el.style.borderColor = isError ? 'var(--red)' : 'var(--border)';
+  el.style.color = isError ? '#fecaca' : 'var(--text2)';
+}
+
 // ─── DATA LOADING ─────────────────────────────────────────────────────────────
 async function loadData() {
   try {
     const resp = await fetch('/api/GetFormData');
+    if (!resp.ok) {
+      throw new Error(`API error ${resp.status}`);
+    }
     const json = await resp.json();
+    if (json.error) {
+      throw new Error(json.error);
+    }
     // merge or override global containers
-    sectionData = json.sectionData || {};
-    versionData = json.versionData || [];
-    encounters = json.encounters || [];
-    trendMonths = json.trendMonths || [];
-    trendScores = json.trendScores || [];
-    specialtyHeatmap = json.specialtyHeatmap || {};
+    sectionData = json.sectionData ?? {};
+    versionData = json.versionData ?? [];
+    encounters = json.encounters ?? [];
+    trendMonths = json.trendMonths ?? [];
+    trendScores = json.trendScores ?? [];
+    specialtyHeatmap = json.specialtyHeatmap ?? {};
+    pathwayCounts = json.pathwayCounts ?? { total: 0, singleVersion: 0, abVersion: 0, unknown: 0 };
+    setDataStatus(`Connected to Azure table · Loaded ${encounters.length} encounter rows`);
   } catch (err) {
     console.error('failed to load form data', err);
+    sectionData = {};
+    versionData = [];
+    encounters = [];
+    trendMonths = [];
+    trendScores = [];
+    specialtyHeatmap = {};
+    pathwayCounts = { total: 0, singleVersion: 0, abVersion: 0, unknown: 0 };
+    setDataStatus(`Azure data load failed: ${err.message}`, true);
   }
 }
 
@@ -758,6 +791,40 @@ function updateKPIs() {
   document.getElementById('kpi3-value').textContent = riskCount;
 
   document.getElementById('encounter-count').textContent = `${encounters.length} encounters`;
+
+  const singleCount = Number(pathwayCounts.singleVersion || 0);
+  const abCount = Number(pathwayCounts.abVersion || 0);
+  const unknownCount = Number(pathwayCounts.unknown || 0);
+  const totalCount = Number(pathwayCounts.total || encounters.length || 0);
+
+  document.getElementById('kpi4-value').textContent = singleCount;
+  document.getElementById('kpi4-sub').textContent = `A/B: ${abCount} · Unknown: ${unknownCount} · Total: ${totalCount}`;
+  updateMode2KPIs();
+}
+
+function updateMode2KPIs() {
+  let v1wins = 0, v2wins = 0, ties = 0;
+  versionData.forEach(d => {
+    v1wins += Number(d.v1wins || 0);
+    v2wins += Number(d.v2wins || 0);
+    ties += Number(d.ties || 0);
+  });
+  const total = v1wins + v2wins + ties;
+
+  const v1Rate = total ? Math.round((v1wins / total) * 100) : 0;
+  const v2Rate = total ? Math.round((v2wins / total) * 100) : 0;
+  const tieRate = total ? Math.round((ties / total) * 100) : 0;
+  const abCount = Number(pathwayCounts.abVersion || 0);
+
+  document.getElementById('kpi-v2-value1').textContent = `${v1Rate}%`;
+  document.getElementById('kpi-v2-value2').textContent = `${v2Rate}%`;
+  document.getElementById('kpi-v2-value3').textContent = `${tieRate}%`;
+  document.getElementById('kpi-v2-value4').textContent = `${abCount}`;
+
+  document.getElementById('kpi-v2-trend1').textContent = `${v1wins} wins`;
+  document.getElementById('kpi-v2-trend2').textContent = `${v2wins} wins`;
+  document.getElementById('kpi-v2-trend3').textContent = `${ties} ties`;
+  document.getElementById('kpi-v2-trend4').textContent = `Total ${pathwayCounts.total || 0}`;
 }
 
 // ─── INIT ──────────────────────────────────────────────────────────────────────
@@ -791,7 +858,7 @@ function applyFilters() { /* In production: filter the data arrays and re-render
 function renderSectionCards() {
   const container = document.getElementById('section-cards');
   container.innerHTML = SECTIONS.map(s => {
-    const d = sectionData[s.key];
+    const d = sectionData[s.key] || { score: 0 };
     const cls = d.score >= 90 ? 'score-high fill-green' : d.score >= 80 ? 'score-mid fill-amber' : 'score-low fill-red';
     const [scoreCls, barCls] = cls.split(' ');
     return `<div class="section-row" onclick="openDrillSection('${s.key}')">
@@ -804,31 +871,14 @@ function renderSectionCards() {
 
 // ─── HEATMAP ───────────────────────────────────────────────────────────────────
 const attrs = ['Organized', 'Thorough', 'Accurate', 'Comprehensive', 'Synthesized', 'Citation'];
-const specialties = ['Cardiology', 'Oncology', 'Orthopedics', 'Neurology', 'Ob-Gyn'];
 
-const heatmapScores = {
-  score: [
-    [88,85,90,82,86,79,83,91,76,88],
-    [81,98,97,95,83,72,88,89,70,85],
-    [90,94,99,92,91,78,88,93,79,91],
-    [85,91,96,90,87,75,85,90,73,88],
-    [79,88,94,88,82,71,80,87,68,83],
-  ],
-  accuracy: [
-    [85,98,99,95,90,82,87,93,80,90],
-    [80,94,97,92,86,78,85,90,75,87],
-    [88,96,99,94,89,80,86,92,78,89],
-    [83,92,98,91,88,77,84,91,76,88],
-    [78,90,95,88,83,72,81,88,70,84],
-  ],
-  thorough: [
-    [78,94,97,93,86,76,83,89,72,86],
-    [76,91,95,90,84,73,80,87,69,84],
-    [86,93,97,92,87,77,85,90,75,87],
-    [82,90,96,90,86,74,83,89,73,86],
-    [76,87,93,86,80,69,78,85,66,81],
-  ],
-};
+function deriveSingleRowHeatmap(metric) {
+  return [SECTIONS.map(s => {
+    const d = sectionData[s.key] || {};
+    const value = metric === 'score' ? d.score : metric === 'accuracy' ? d.accuracy : d.thorough;
+    return value ?? 0;
+  })];
+}
 
 function setHeatmapView(view, el) {
   heatmapView = view;
@@ -849,10 +899,9 @@ function getTextColor(v) { return v >= 80 ? '#fff' : '#fff'; }
 function renderHeatmap() {
   const container = document.getElementById('section-heatmap');
 
-  // pick data sources: API-provided if available, otherwise fall back to hardcoded demo
-  let specs = specialties;
-  let dataMatrix = heatmapScores[heatmapView];
-  if (specialtyHeatmap && specialtyHeatmap.specialties && specialtyHeatmap[heatmapView]) {
+  let specs = ['All Specialties'];
+  let dataMatrix = deriveSingleRowHeatmap(heatmapView);
+  if (specialtyHeatmap && Array.isArray(specialtyHeatmap.specialties) && Array.isArray(specialtyHeatmap[heatmapView]) && specialtyHeatmap.specialties.length) {
     specs = specialtyHeatmap.specialties;
     dataMatrix = specialtyHeatmap[heatmapView];
   }
@@ -924,14 +973,13 @@ const chartDefaults = {
 
 function renderRadarChart() {
   const ctx = document.getElementById('radarChart').getContext('2d');
+  const radarValues = SECTIONS.map(s => (sectionData[s.key] && sectionData[s.key].score != null) ? sectionData[s.key].score : 0);
   charts.radar = new Chart(ctx, {
     type: 'radar',
     data: {
       labels: ['HPI', 'Medications', 'Allergies', 'Immunizations', 'Social Hx', 'Family Hx', 'ROS', 'Phys Exam', 'Results', 'A&P'],
       datasets: [
-        { label: 'Cardiology', data: [88,97,98,92,88,79,87,91,79,90], borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.1)', pointBackgroundColor: '#3b82f6', borderWidth: 2 },
-        { label: 'Oncology', data: [81,95,97,90,84,73,85,89,72,86], borderColor: '#8b5cf6', backgroundColor: 'rgba(139,92,246,0.08)', pointBackgroundColor: '#8b5cf6', borderWidth: 2 },
-        { label: 'Orthopedics', data: [90,96,99,94,89,77,88,93,77,91], borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.08)', pointBackgroundColor: '#10b981', borderWidth: 2 },
+        { label: 'Azure Table Metrics', data: radarValues, borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.1)', pointBackgroundColor: '#3b82f6', borderWidth: 2 },
       ]
     },
     options: {
@@ -1090,9 +1138,10 @@ function closeDrillIfBg(e) { if (e.target === document.getElementById('drillOver
 function openDrillSection(key) {
   const s = SECTIONS.find(x => x.key === key);
   const d = sectionData[key];
+  if (!d) return;
 
   let attrRows = s.attrs.map(a => {
-    const v = d.attrs[a] || 85;
+    const v = d.attrs[a] ?? 0;
     const c = v >= 90 ? '#10b981' : v >= 80 ? '#f59e0b' : '#ef4444';
     return `<div class="attr-row">
       <div class="attr-name">${a}</div>
@@ -1193,10 +1242,12 @@ function openDrillEncounter(id) {
 }
 
 function openDrillKPI(type) {
-  if (type === 'overall') openDrillSection('ap');
-  else if (type === 'top') openDrillSection('allergies');
-  else if (type === 'risk') openDrillSection('results');
-  else if (type === 'encounters') openDrillEncounter('NEAT-12345');
+  const availableSections = Object.keys(sectionData);
+  const firstSection = availableSections[0];
+  if (type === 'overall' && firstSection) openDrillSection(firstSection);
+  else if (type === 'top' && firstSection) openDrillSection(firstSection);
+  else if (type === 'risk' && firstSection) openDrillSection(firstSection);
+  else if (type === 'encounters' && encounters.length) openDrillEncounter(encounters[0].id);
 }
 </script>
 </body>

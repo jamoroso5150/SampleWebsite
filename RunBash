@@ -1,0 +1,5 @@
+python3 -m venv .venv           # only once
+source .venv/bin/activate        # or .venv\Scripts\activate on Windows
+pip install -r requirements.txt  # installs flask + azure-data-tables
+# choose a free port if 5000 is occupied
+PORT=5001 python app.py
