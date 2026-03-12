@@ -730,6 +730,20 @@ let currentMode = 1;
 let heatmapView = 'score';
 let charts = {};
 
+function getApiBaseUrl() {
+  const qp = new URLSearchParams(window.location.search).get('apiBase');
+  const injected = (window.__APP_CONFIG__ && window.__APP_CONFIG__.apiBaseUrl) ? window.__APP_CONFIG__.apiBaseUrl : '';
+  const stored = localStorage.getItem('apiBaseUrl') || '';
+  const base = (qp || injected || stored || '').trim();
+  if (!base) return '';
+  return base.endsWith('/') ? base.slice(0, -1) : base;
+}
+
+function apiUrl(path) {
+  const base = getApiBaseUrl();
+  return base ? `${base}${path}` : path;
+}
+
 function setDataStatus(message, isError = false) {
   const el = document.getElementById('data-status');
   if (!el) return;
@@ -747,8 +761,12 @@ function setDataStatus(message, isError = false) {
 // ─── DATA LOADING ─────────────────────────────────────────────────────────────
 async function loadData() {
   try {
-    const resp = await fetch('/api/GetFormData');
+    const resp = await fetch(apiUrl('/api/GetFormData'));
     if (!resp.ok) {
+      const isSwa = window.location.hostname.includes('azurestaticapps.net');
+      if (resp.status === 404 && isSwa) {
+        throw new Error('API error 404: no backend is attached to this Static Web App. Set an external API with ?apiBase=https://<your-backend-host> or inject window.__APP_CONFIG__.apiBaseUrl.');
+      }
       throw new Error(`API error ${resp.status}`);
     }
     const json = await resp.json();
@@ -763,7 +781,9 @@ async function loadData() {
     trendScores = json.trendScores ?? [];
     specialtyHeatmap = json.specialtyHeatmap ?? {};
     pathwayCounts = json.pathwayCounts ?? { total: 0, singleVersion: 0, abVersion: 0, unknown: 0 };
-    setDataStatus(`Connected to Azure table · Loaded ${encounters.length} encounter rows`);
+    const base = getApiBaseUrl();
+    const source = base ? `via ${base}` : 'via same-origin /api';
+    setDataStatus(`Connected to Azure table ${source} · Loaded ${encounters.length} encounter rows`);
   } catch (err) {
     console.error('failed to load form data', err);
     sectionData = {};
