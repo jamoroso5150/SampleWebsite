@@ -702,56 +702,51 @@ const SECTIONS = [
   { key: 'ap', label: 'Assessment & Plan', short: 'A&P', attrs: ['Thorough', 'Accurate', 'Comprehensive', 'Synthesized'] },
 ];
 
-// Simulated pass rates for each section
-const sectionData = {
-  hpi:            { score: 82, accuracy: 85, thorough: 78, attrs: { Organized: 80, Comprehensive: 82, Thorough: 78, Accurate: 85 } },
-  medications:    { score: 96, accuracy: 98, thorough: 94, attrs: { Thorough: 94, Accurate: 98 } },
-  allergies:      { score: 98, accuracy: 99, thorough: 97, attrs: { Thorough: 97, Accurate: 99 } },
-  immunizations:  { score: 94, accuracy: 95, thorough: 93, attrs: { Thorough: 93, Accurate: 95 } },
-  social_history: { score: 88, accuracy: 90, thorough: 86, attrs: { Thorough: 86, Accurate: 90 } },
-  family_history: { score: 79, accuracy: 82, thorough: 76, attrs: { Thorough: 76, Accurate: 82 } },
-  ros:            { score: 85, accuracy: 87, thorough: 83, attrs: { Thorough: 83, Accurate: 87 } },
-  physical_exam:  { score: 91, accuracy: 93, thorough: 89, attrs: { Organized: 94, Thorough: 89, Accurate: 93 } },
-  results:        { score: 76, accuracy: 80, thorough: 72, attrs: { Thorough: 72, Accurate: 80, Citation: 74 } },
-  ap:             { score: 88, accuracy: 90, thorough: 86, attrs: { Thorough: 86, Accurate: 90, Comprehensive: 87, Synthesized: 85 } },
-};
+// data containers that will be populated from the backend
+let sectionData = {};
+let versionData = [];
+let encounters = [];
+let trendMonths = [];
+let trendScores = [];
+let specialtyHeatmap = {};  // optional heatmap structure returned by the API
 
-// Version comparison data
-const versionData = [
-  { section: 'HPI', v1: 82, v2: 78, v1wins: 45, v2wins: 32, ties: 12, tieType: 'Both Incorrect', winner: 'V1' },
-  { section: 'Medications', v1: 96, v2: 91, v1wins: 38, v2wins: 25, ties: 26, tieType: 'Both Correct', winner: 'V1' },
-  { section: 'Allergies', v1: 98, v2: 95, v1wins: 20, v2wins: 15, ties: 54, tieType: 'Both Correct', winner: 'V1' },
-  { section: 'Immunizations', v1: 92, v2: 95, v1wins: 28, v2wins: 35, ties: 26, tieType: 'Both Correct', winner: 'V2' },
-  { section: 'Social History', v1: 88, v2: 84, v1wins: 40, v2wins: 30, ties: 19, tieType: 'Both Correct', winner: 'V1' },
-  { section: 'Family History', v1: 76, v2: 79, v1wins: 30, v2wins: 38, ties: 21, tieType: 'Both Incorrect', winner: 'V2' },
-  { section: 'ROS', v1: 85, v2: 82, v1wins: 42, v2wins: 33, ties: 14, tieType: 'Both Correct', winner: 'V1' },
-  { section: 'Physical Exam', v1: 91, v2: 88, v1wins: 44, v2wins: 34, ties: 11, tieType: 'Both Correct', winner: 'V1' },
-  { section: 'Results', v1: 76, v2: 80, v1wins: 32, v2wins: 41, ties: 16, tieType: 'Both Incorrect', winner: 'V2' },
-  { section: 'A&P', v1: 88, v2: 85, v1wins: 46, v2wins: 36, ties: 7, tieType: 'Both Correct', winner: 'V1' },
-];
 
-// Encounter data
-const encounters = [
-  { id: 'NEAT-12345', specialty: 'Test', region: 'US', evaluator: 'J. Amoroso', hpi: 100, ap: 100, pe: 100, overall: 100, status: 'Pass' },
-  { id: 'NEAT-11201', specialty: 'Cardiology', region: 'US', evaluator: 'M. Chen', hpi: 80, ap: 90, pe: 85, overall: 85, status: 'Pass' },
-  { id: 'NEAT-11202', specialty: 'Oncology', region: 'EU', evaluator: 'S. Patel', hpi: 75, ap: 65, pe: 80, overall: 73, status: 'At Risk' },
-  { id: 'NEAT-11203', specialty: 'Orthopedics', region: 'US', evaluator: 'R. Torres', hpi: 90, ap: 88, pe: 92, overall: 90, status: 'Pass' },
-  { id: 'NEAT-11204', specialty: 'Neurology', region: 'APAC', evaluator: 'L. Kim', hpi: 60, ap: 55, pe: 70, overall: 62, status: 'Blocked' },
-  { id: 'NEAT-11205', specialty: 'Cardiology', region: 'EU', evaluator: 'A. Müller', hpi: 95, ap: 92, pe: 88, overall: 91, status: 'Pass' },
-  { id: 'NEAT-11206', specialty: 'Oncology', region: 'US', evaluator: 'P. Wright', hpi: 78, ap: 84, pe: 76, overall: 79, status: 'At Risk' },
-];
+// versionData will also be filled from the API when available
+// (kept as let above so we can override the empty value)
 
-// Trend data
-const trendMonths = ['Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar'];
-const trendScores = [81, 83, 82, 85, 86, 87];
+// encounters array will be replaced by API data
+
+
+// trend data placeholders - populated via API
+// let trendMonths = [];
+// let trendScores = [];
+
 
 // ─── STATE ─────────────────────────────────────────────────────────────────────
 let currentMode = 1;
 let heatmapView = 'score';
 let charts = {};
 
+// ─── DATA LOADING ─────────────────────────────────────────────────────────────
+async function loadData() {
+  try {
+    const resp = await fetch('/api/GetFormData');
+    const json = await resp.json();
+    // merge or override global containers
+    sectionData = json.sectionData || {};
+    versionData = json.versionData || [];
+    encounters = json.encounters || [];
+    trendMonths = json.trendMonths || [];
+    trendScores = json.trendScores || [];
+    specialtyHeatmap = json.specialtyHeatmap || {};
+  } catch (err) {
+    console.error('failed to load form data', err);
+  }
+}
+
 // ─── INIT ──────────────────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  await loadData();
   renderSectionCards();
   renderHeatmap();
   renderEncounterTable();
@@ -836,18 +831,26 @@ function getTextColor(v) { return v >= 80 ? '#fff' : '#fff'; }
 
 function renderHeatmap() {
   const container = document.getElementById('section-heatmap');
-  const data = heatmapScores[heatmapView];
+
+  // pick data sources: API-provided if available, otherwise fall back to hardcoded demo
+  let specs = specialties;
+  let dataMatrix = heatmapScores[heatmapView];
+  if (specialtyHeatmap && specialtyHeatmap.specialties && specialtyHeatmap[heatmapView]) {
+    specs = specialtyHeatmap.specialties;
+    dataMatrix = specialtyHeatmap[heatmapView];
+  }
+
   const colW = `${Math.floor(100 / SECTIONS.length)}%`;
 
   let html = `<div class="heatmap-col-labels" style="display:flex;gap:3px;margin-left:148px;margin-bottom:4px">`;
   SECTIONS.forEach(s => { html += `<div style="flex:1;font-size:9px;color:var(--text3);text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.short}</div>`; });
   html += `</div>`;
 
-  specialties.forEach((sp, si) => {
+  specs.forEach((sp, si) => {
     html += `<div class="heatmap-row" style="display:flex;gap:3px;align-items:center;margin-bottom:3px">`;
     html += `<div class="heatmap-label" style="width:140px;font-size:11px;color:var(--text3);text-align:right;padding-right:8px">${sp}</div>`;
     SECTIONS.forEach((s, ci) => {
-      const v = data[si][ci];
+      const v = (dataMatrix[si] && dataMatrix[si][ci] != null) ? dataMatrix[si][ci] : 0;
       html += `<div class="heatmap-cell" style="flex:1;background:${getColor(v)};color:#fff;opacity:0.9" onclick="openDrillSection('${s.key}')" title="${sp} · ${s.label}: ${v}%">${v}</div>`;
     });
     html += `</div>`;
