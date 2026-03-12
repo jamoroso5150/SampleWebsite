@@ -744,12 +744,29 @@ async function loadData() {
   }
 }
 
+function updateKPIs() {
+  // overall pass rate: average of all section scores
+  const scores = Object.values(sectionData).map(d => d.score).filter(v => v != null);
+  const overall = scores.length ? Math.round(scores.reduce((a,b)=>a+b)/scores.length) : 0;
+  document.getElementById('kpi1-value').textContent = overall + '%';
+  document.getElementById('kpi1-sub').textContent = `Across all ${scores.length} note sections`;
+
+  const topCount = scores.filter(v=>v>=95).length;
+  document.getElementById('kpi2-value').textContent = topCount;
+
+  const riskCount = scores.filter(v=>v<80).length;
+  document.getElementById('kpi3-value').textContent = riskCount;
+
+  document.getElementById('encounter-count').textContent = `${encounters.length} encounters`;
+}
+
 // ─── INIT ──────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
   await loadData();
   renderSectionCards();
   renderHeatmap();
   renderEncounterTable();
+  updateKPIs();
   renderRadarChart();
   renderTrendChart();
   renderDonutChart();
@@ -932,16 +949,14 @@ function renderTrendChart() {
     data: {
       labels: trendMonths,
       datasets: [
-        { label: 'Overall Pass Rate', data: trendScores, borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.08)', fill: true, tension: 0.4, pointBackgroundColor: '#3b82f6', pointRadius: 4, borderWidth: 2 },
-        { label: 'A&P', data: [82,84,83,86,87,88], borderColor: '#8b5cf6', backgroundColor: 'transparent', tension: 0.4, pointRadius: 3, borderWidth: 2, borderDash: [4,3] },
-        { label: 'HPI', data: [77,78,79,80,81,82], borderColor: '#f59e0b', backgroundColor: 'transparent', tension: 0.4, pointRadius: 3, borderWidth: 2, borderDash: [4,3] },
+        { label: 'Overall Pass Rate', data: trendScores, borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.08)', fill: true, tension: 0.4, pointBackgroundColor: '#3b82f6', pointRadius: 4, borderWidth: 2 }
       ]
     },
     options: {
       responsive: true, maintainAspectRatio: false,
       scales: {
         x: { grid: { color: '#1e2f45' }, ticks: { color: '#8899b4', font: { size: 10 } } },
-        y: { min: 70, max: 100, grid: { color: '#1e2f45' }, ticks: { color: '#8899b4', font: { size: 10 }, callback: v => v + '%' } }
+        y: { min: 0, max: 100, grid: { color: '#1e2f45' }, ticks: { color: '#8899b4', font: { size: 10 }, callback: v => v + '%' } }
       },
       plugins: { legend: { labels: { color: '#8899b4', font: { size: 10 }, boxWidth: 12 } } }
     }
@@ -950,11 +965,27 @@ function renderTrendChart() {
 
 function renderDonutChart() {
   const ctx = document.getElementById('donutChart').getContext('2d');
+  // compute average attribute scores across all sections
+  const attrSums = {};
+  let count = 0;
+  Object.values(sectionData).forEach(sec => {
+    count++;
+    Object.entries(sec.attrs || {}).forEach(([k,v]) => {
+      attrSums[k] = (attrSums[k]||0) + v;
+    });
+  });
+  const labels = [];
+  const data = [];
+  const colors = {'Accurate':'#ef4444','Thorough':'#f59e0b','Organized':'#3b82f6','Citation':'#8b5cf6','Comprehensive':'#10b981','Synthesized':'#10b981'};
+  Object.entries(attrSums).forEach(([k,sum])=>{
+    labels.push(k);
+    data.push(Math.round(sum/count));
+  });
   charts.donut = new Chart(ctx, {
     type: 'doughnut',
     data: {
-      labels: ['Accuracy (Hallucinations)', 'Thoroughness (Omissions)', 'Organization', 'Citation Issues', 'Comprehensiveness'],
-      datasets: [{ data: [34, 28, 18, 12, 8], backgroundColor: ['#ef4444','#f59e0b','#3b82f6','#8b5cf6','#10b981'], borderWidth: 0, hoverOffset: 8 }]
+      labels,
+      datasets: [{ data, backgroundColor: labels.map(l=>colors[l]||'#4a5e7a'), borderWidth: 0, hoverOffset: 8 }]
     },
     options: {
       responsive: true, maintainAspectRatio: false, cutout: '65%',
@@ -989,22 +1020,23 @@ function renderH2HChart() {
 
 function renderEditChart() {
   const ctx = document.getElementById('editChart').getContext('2d');
-  const editV1 = [3.2, 0.8, 0.4, 1.1, 1.8, 3.5, 2.1, 1.3, 3.8, 1.9];
-  const editV2 = [3.8, 1.4, 0.7, 1.0, 2.2, 3.2, 2.4, 1.7, 3.4, 2.3];
+  const labels = versionData.map(d => d.section);
+  const editV1 = versionData.map(d => 100 - (d.v1 || 0));
+  const editV2 = versionData.map(d => 100 - (d.v2 || 0));
   charts.edit = new Chart(ctx, {
     type: 'bar',
     data: {
-      labels: versionData.map(d => d.section),
+      labels,
       datasets: [
-        { label: 'V1 Avg Edits', data: editV1, backgroundColor: 'rgba(59,130,246,0.7)', borderRadius: 4 },
-        { label: 'V2 Avg Edits', data: editV2, backgroundColor: 'rgba(139,92,246,0.7)', borderRadius: 4 },
+        { label: 'V1 Avg Edits (100-score)', data: editV1, backgroundColor: 'rgba(59,130,246,0.7)', borderRadius: 4 },
+        { label: 'V2 Avg Edits (100-score)', data: editV2, backgroundColor: 'rgba(139,92,246,0.7)', borderRadius: 4 },
       ]
     },
     options: {
       responsive: true, maintainAspectRatio: false,
       scales: {
         x: { grid: { color: '#1e2f45' }, ticks: { color: '#8899b4', font: { size: 10 } } },
-        y: { grid: { color: '#1e2f45' }, ticks: { color: '#8899b4', font: { size: 10 } }, title: { display: true, text: 'Avg Edits Required', color: '#4a5e7a', font: { size: 10 } } }
+        y: { grid: { color: '#1e2f45' }, ticks: { color: '#8899b4', font: { size: 10 } }, title: { display: true, text: 'Derived Metric', color: '#4a5e7a', font: { size: 10 } } }
       },
       plugins: { legend: { labels: { color: '#8899b4', font: { size: 10 }, boxWidth: 12 } } }
     }
@@ -1013,11 +1045,14 @@ function renderEditChart() {
 
 function renderTieCharts() {
   const tieCtx = document.getElementById('tieChart').getContext('2d');
+  // compute tie/win counts from versionData
+  let v1wins = 0, v2wins = 0, ties = 0;
+  versionData.forEach(d => { v1wins += d.v1wins||0; v2wins += d.v2wins||0; ties += d.ties||0; });
   charts.tie = new Chart(tieCtx, {
     type: 'pie',
     data: {
-      labels: ['Both Correct', 'Both Incorrect', 'Split Decision'],
-      datasets: [{ data: [55, 30, 15], backgroundColor: ['#10b981','#ef4444','#f59e0b'], borderWidth: 0, hoverOffset: 6 }]
+      labels: ['V1 Wins','V2 Wins','Ties'],
+      datasets: [{ data: [v1wins, v2wins, ties], backgroundColor: ['#3b82f6','#8b5cf6','#f59e0b'], borderWidth: 0, hoverOffset: 6 }]
     },
     options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: '#8899b4', font: { size: 10 }, boxWidth: 10 } } } }
   });
@@ -1026,20 +1061,20 @@ function renderTieCharts() {
   charts.v1s = new Chart(v1Ctx, {
     type: 'bar', indexAxis: 'y',
     data: {
-      labels: ['HPI','Medications','Social Hx','ROS','A&P'],
-      datasets: [{ label: 'Win Rate %', data: [58,60,57,56,56], backgroundColor: '#3b82f6', borderRadius: 4 }]
+      labels: versionData.map(d => d.section),
+      datasets: [{ label: 'Win Rate %', data: versionData.map(d => Math.round((d.v1wins||0)/((d.v1wins||0)+(d.v2wins||0)+(d.ties||0))*100)), backgroundColor: '#3b82f6', borderRadius: 4 }]
     },
-    options: { responsive: true, maintainAspectRatio: false, scales: { x: { min:40,max:70, grid:{color:'#1e2f45'}, ticks:{color:'#8899b4',font:{size:9}} }, y:{grid:{color:'#1e2f45'},ticks:{color:'#8899b4',font:{size:9}}} }, plugins:{legend:{display:false}} }
+    options: { responsive: true, maintainAspectRatio: false, scales: { x: { grid:{color:'#1e2f45'}, ticks:{color:'#8899b4',font:{size:9}} }, y:{grid:{color:'#1e2f45'},ticks:{color:'#8899b4',font:{size:9}}} }, plugins:{legend:{display:false}} }
   });
 
   const v2Ctx = document.getElementById('v2strengthChart').getContext('2d');
   charts.v2s = new Chart(v2Ctx, {
     type: 'bar', indexAxis: 'y',
     data: {
-      labels: ['Results','Family Hx','Immunizations','Physical Exam','Allergies'],
-      datasets: [{ label: 'Win Rate %', data: [47,49,42,41,40], backgroundColor: '#8b5cf6', borderRadius: 4 }]
+      labels: versionData.map(d => d.section),
+      datasets: [{ label: 'Win Rate %', data: versionData.map(d => Math.round((d.v2wins||0)/((d.v1wins||0)+(d.v2wins||0)+(d.ties||0))*100)), backgroundColor: '#8b5cf6', borderRadius: 4 }]
     },
-    options: { responsive: true, maintainAspectRatio: false, scales: { x: { min:30,max:60, grid:{color:'#1e2f45'}, ticks:{color:'#8899b4',font:{size:9}} }, y:{grid:{color:'#1e2f45'},ticks:{color:'#8899b4',font:{size:9}}} }, plugins:{legend:{display:false}} }
+    options: { responsive: true, maintainAspectRatio: false, scales: { x: { grid:{color:'#1e2f45'}, ticks:{color:'#8899b4',font:{size:9}} }, y:{grid:{color:'#1e2f45'},ticks:{color:'#8899b4',font:{size:9}}} }, plugins:{legend:{display:false}} }
   });
 }
 
